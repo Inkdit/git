@@ -413,7 +413,7 @@ const char *resolve_ref(const char *ref, unsigned char *sha1, int reading, int *
 		*flag = 0;
 
 	for (;;) {
-		const char *path = git_path("%s", ref);
+		char path[PATH_MAX];
 		struct stat st;
 		char *buf;
 		int fd;
@@ -421,6 +421,7 @@ const char *resolve_ref(const char *ref, unsigned char *sha1, int reading, int *
 		if (--depth < 0)
 			return NULL;
 
+		git_snpath(path, sizeof(path), "%s", ref);
 		/* Special case: non-existing file. */
 		if (lstat(path, &st) < 0) {
 			struct ref_list *list = get_packed_refs();
@@ -973,14 +974,14 @@ int rename_ref(const char *oldref, const char *newref, const char *logmsg)
 	struct stat loginfo;
 	int log = !lstat(git_path("logs/%s", oldref), &loginfo);
 	const char *symref = NULL;
-	int is_symref = 0;
 
 	if (log && S_ISLNK(loginfo.st_mode))
 		return error("reflog for %s is a symlink", oldref);
 
 	symref = resolve_ref(oldref, orig_sha1, 1, &flag);
 	if (flag & REF_ISSYMREF)
-		is_symref = 1;
+		return error("refname %s is a symbolic ref, renaming it is not supported",
+			oldref);
 	if (!symref)
 		return error("refname %s not found", oldref);
 
@@ -1044,20 +1045,17 @@ int rename_ref(const char *oldref, const char *newref, const char *logmsg)
 	}
 	logmoved = log;
 
-	if (!is_symref) {
-		lock = lock_ref_sha1_basic(newref, NULL, 0, NULL);
-		if (!lock) {
-			error("unable to lock %s for update", newref);
-			goto rollback;
-		}
-		lock->force_write = 1;
-		hashcpy(lock->old_sha1, orig_sha1);
-		if (write_ref_sha1(lock, orig_sha1, logmsg)) {
-			error("unable to write current sha1 into %s", newref);
-			goto rollback;
-		}
-	} else
-		create_symref(newref, symref, logmsg);
+	lock = lock_ref_sha1_basic(newref, NULL, 0, NULL);
+	if (!lock) {
+		error("unable to lock %s for update", newref);
+		goto rollback;
+	}
+	lock->force_write = 1;
+	hashcpy(lock->old_sha1, orig_sha1);
+	if (write_ref_sha1(lock, orig_sha1, logmsg)) {
+		error("unable to write current sha1 into %s", newref);
+		goto rollback;
+	}
 
 	return 0;
 
@@ -1145,13 +1143,14 @@ static int log_ref_write(const char *ref_name, const unsigned char *old_sha1,
 	int logfd, written, oflags = O_APPEND | O_WRONLY;
 	unsigned maxlen, len;
 	int msglen;
-	char *log_file, *logrec;
+	char log_file[PATH_MAX];
+	char *logrec;
 	const char *committer;
 
 	if (log_all_ref_updates < 0)
 		log_all_ref_updates = !is_bare_repository();
 
-	log_file = git_path("logs/%s", ref_name);
+	git_snpath(log_file, sizeof(log_file), "logs/%s", ref_name);
 
 	if (log_all_ref_updates &&
 	    (!prefixcmp(ref_name, "refs/heads/") ||
@@ -1280,7 +1279,7 @@ int create_symref(const char *ref_target, const char *refs_heads_master,
 	const char *lockpath;
 	char ref[1000];
 	int fd, len, written;
-	char *git_HEAD = xstrdup(git_path("%s", ref_target));
+	char *git_HEAD = git_pathdup("%s", ref_target);
 	unsigned char old_sha1[20], new_sha1[20];
 
 	if (logmsg && read_ref(ref_target, old_sha1))
